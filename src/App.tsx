@@ -6,37 +6,132 @@ import clsx from 'clsx';
 import { TerminalSurface } from './components/TerminalSurface';
 import './App.css';
 import type {
+  AppLanguage,
   BootstrapPayload,
   SessionMetadata,
   SessionStatusEvent,
   UiNotice,
-  WindowOpacitySyncEvent,
   WindowState,
 } from './types';
 
 const EMPTY_WINDOW_STATE: WindowState = {
   alwaysOnTop: true,
   clickThrough: false,
-  opacityMode: 'focus',
+  overlayAlpha: 0.16,
   dockMode: 'top_bar',
+  language: 'zh_cn',
+  onboardingCompleted: false,
+  positionPinned: false,
   width: 1440,
   height: 340,
   x: null,
   y: 24,
 };
 
-function statusLabel(status: SessionMetadata['status']) {
+const copy = {
+  zh_cn: {
+    eyebrow: '透明悬浮 Codex',
+    newTab: '新建会话',
+    hide: '隐藏',
+    clickThroughOn: '关闭穿透',
+    clickThroughOff: '开启穿透',
+    pinnedOn: '取消固定',
+    pinnedOff: '固定当前位置',
+    topBar: '顶部横条',
+    rightRail: '右侧窄栏',
+    lang: '语言',
+    transparency: '透明度',
+    workspace: '工作目录',
+    hotkeys: '快捷键',
+    mode: '窗口模式',
+    interactive: '可交互',
+    passThrough: '已穿透',
+    noSessions: '还没有 Codex 会话',
+    startFirst: '开始第一个会话',
+    overlayReady: '窗口已经准备好，先新建一个 Codex 会话。',
+    attach: '连接',
+    end: '结束',
+    settings: '设置',
+    onboardingTitle: '首次使用引导',
+    onboardingBody:
+      '1. 拖动顶部栏把窗口放到合适位置。2. 点“固定当前位置”保存位置。3. 用透明度滑杆把它调到刚好不挡视线。4. 点“新建会话”启动 Codex。',
+    onboardingSecondary:
+      '如果只想看输出，不想遮挡鼠标操作，可以开启穿透。之后按 Ctrl+Alt+Space 随时显示/隐藏。',
+    onboardingAction: '开始使用',
+    onboardingDismiss: '我知道了',
+    sessionIssue: '终端问题',
+    failedCreate: '启动 Codex 失败',
+    failedPin: '位置固定失败',
+    failedState: '窗口设置失败',
+    failedBootstrap: '初始化失败',
+    failedPersist: '保存标签失败',
+    failedClose: '关闭会话失败',
+    failedAttach: '恢复会话失败',
+    live: '运行中',
+    starting: '启动中',
+    detached: '已分离',
+    exited: '已退出',
+    failed: '失败',
+  },
+  en: {
+    eyebrow: 'Minimal transparent Codex',
+    newTab: 'New session',
+    hide: 'Hide',
+    clickThroughOn: 'Disable pass-through',
+    clickThroughOff: 'Enable pass-through',
+    pinnedOn: 'Unpin position',
+    pinnedOff: 'Pin current position',
+    topBar: 'Top bar',
+    rightRail: 'Right rail',
+    lang: 'Language',
+    transparency: 'Transparency',
+    workspace: 'Workspace',
+    hotkeys: 'Hotkeys',
+    mode: 'Window mode',
+    interactive: 'Interactive',
+    passThrough: 'Pass-through on',
+    noSessions: 'No Codex sessions yet',
+    startFirst: 'Start first session',
+    overlayReady: 'The overlay is ready. Start a Codex session to begin.',
+    attach: 'Attach',
+    end: 'End',
+    settings: 'Settings',
+    onboardingTitle: 'Quick start',
+    onboardingBody:
+      '1. Drag the top bar to where you want it. 2. Click “Pin current position” to keep it there. 3. Use the transparency slider until it stops blocking your view. 4. Click “New session” to launch Codex.',
+    onboardingSecondary:
+      'Enable pass-through when you only want to watch output. Use Ctrl+Alt+Space any time to show or hide the overlay.',
+    onboardingAction: 'Start using it',
+    onboardingDismiss: 'Dismiss',
+    sessionIssue: 'Terminal issue',
+    failedCreate: 'Failed to start Codex',
+    failedPin: 'Failed to pin window position',
+    failedState: 'Failed to update window settings',
+    failedBootstrap: 'Bootstrap failed',
+    failedPersist: 'Failed to persist active tab',
+    failedClose: 'Failed to close session',
+    failedAttach: 'Failed to attach session',
+    live: 'Live',
+    starting: 'Starting',
+    detached: 'Detached',
+    exited: 'Exited',
+    failed: 'Failed',
+  },
+} as const;
+
+function getStatusLabel(language: AppLanguage, status: SessionMetadata['status']) {
+  const dict = copy[language];
   switch (status) {
     case 'running':
-      return 'Live';
+      return dict.live;
     case 'starting':
-      return 'Starting';
+      return dict.starting;
     case 'detached':
-      return 'Detached';
+      return dict.detached;
     case 'failed':
-      return 'Failed';
+      return dict.failed;
     case 'exited':
-      return 'Exited';
+      return dict.exited;
     default:
       return status;
   }
@@ -58,41 +153,36 @@ export default function App() {
   );
   const activeSession =
     sessions[activeIndex] ?? sessions.find((session) => session.status !== 'exited') ?? null;
-
-  const pushNotice = (notice: UiNotice) => {
-    setNotices((current) => [notice, ...current].slice(0, 6));
-  };
-
-  const persistActiveSession = async (sessionId: string | null) => {
-    await invoke('set_active_session', {
-      payload: { sessionId },
-    });
-  };
-
-  const hydrate = async () => {
-    const bootstrap = await invoke<BootstrapPayload>('bootstrap');
-    setSessions(bootstrap.snapshot.sessions);
-    setActiveSessionId(
-      bootstrap.snapshot.activeSessionId ??
-        bootstrap.snapshot.sessions.find((session) => session.status !== 'exited')?.id ??
-        null,
-    );
-    setWindowState(bootstrap.snapshot.window);
-    setNotices(bootstrap.notices);
-    setHotkeySummary(bootstrap.hotkeySummary);
-    setDefaultCwd(bootstrap.defaultCwd);
-    setReady(true);
-  };
+  const dict = copy[windowState.language];
 
   useEffect(() => {
-    void hydrate().catch((error) => {
-      pushNotice({
-        level: 'error',
-        title: 'Bootstrap failed',
-        detail: String(error),
-      });
-      setReady(true);
-    });
+    document.documentElement.style.setProperty('--overlay-alpha', `${windowState.overlayAlpha}`);
+  }, [windowState.overlayAlpha]);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const bootstrap = await invoke<BootstrapPayload>('bootstrap');
+        setSessions(bootstrap.snapshot.sessions);
+        setActiveSessionId(
+          bootstrap.snapshot.activeSessionId ??
+            bootstrap.snapshot.sessions.find((session) => session.status !== 'exited')?.id ??
+            null,
+        );
+        setWindowState(bootstrap.snapshot.window);
+        setNotices(bootstrap.notices);
+        setHotkeySummary(bootstrap.hotkeySummary);
+        setDefaultCwd(bootstrap.defaultCwd);
+      } catch (error) {
+        pushNotice({
+          level: 'error',
+          title: copy.zh_cn.failedBootstrap,
+          detail: String(error),
+        });
+      } finally {
+        setReady(true);
+      }
+    })();
   }, []);
 
   /* eslint-disable react-hooks/exhaustive-deps */
@@ -103,7 +193,7 @@ export default function App() {
       }
 
       if (event.payload === 'window.click_through') {
-        void toggleClickThrough();
+        void applyWindowMode({ clickThrough: !windowState.clickThrough });
       }
 
       if (event.payload === 'session.previous' && sessions.length > 1) {
@@ -136,18 +226,34 @@ export default function App() {
       );
     });
 
-    const detachOpacity = listen<WindowOpacitySyncEvent>('window-opacity-sync', (event) => {
-      document.documentElement.style.setProperty('--overlay-alpha', `${event.payload.alpha}`);
-    });
-
     return () => {
       void detachHotkey.then((unlisten) => unlisten());
       void detachNotice.then((unlisten) => unlisten());
       void detachStatus.then((unlisten) => unlisten());
-      void detachOpacity.then((unlisten) => unlisten());
     };
-  }, [activeIndex, pushNotice, sessions]);
+  }, [activeIndex, sessions, windowState]);
   /* eslint-enable react-hooks/exhaustive-deps */
+
+  function pushNotice(notice: UiNotice) {
+    setNotices((current) => [notice, ...current].slice(0, 6));
+  }
+
+  async function persistActiveSession(sessionId: string | null) {
+    await invoke('set_active_session', { payload: { sessionId } });
+  }
+
+  async function applyWindowMode(payload: Partial<WindowState> & Record<string, unknown>) {
+    try {
+      const nextState = await invoke<WindowState>('update_window_mode', { payload });
+      setWindowState(nextState);
+    } catch (error) {
+      pushNotice({
+        level: 'warning',
+        title: dict.failedState,
+        detail: String(error),
+      });
+    }
+  }
 
   async function handleCreateSession() {
     if (busy) {
@@ -157,9 +263,7 @@ export default function App() {
     try {
       setBusy(true);
       const session = await invoke<SessionMetadata>('create_session', {
-        payload: {
-          cwd: defaultCwd,
-        },
+        payload: { cwd: defaultCwd },
       });
       setSessions((current) => [...current, session]);
       setActiveSessionId(session.id);
@@ -167,7 +271,7 @@ export default function App() {
     } catch (error) {
       pushNotice({
         level: 'error',
-        title: 'Failed to start Codex',
+        title: dict.failedCreate,
         detail: String(error),
       });
     } finally {
@@ -182,87 +286,20 @@ export default function App() {
     } catch (error) {
       pushNotice({
         level: 'warning',
-        title: 'Failed to persist active tab',
+        title: dict.failedPersist,
         detail: String(error),
       });
     }
   }
 
-  async function toggleClickThrough() {
-    try {
-      const nextState = await invoke<WindowState>('update_window_mode', {
-        payload: {
-          clickThrough: !windowState.clickThrough,
-        },
-      });
-      setWindowState(nextState);
-    } catch (error) {
-      pushNotice({
-        level: 'warning',
-        title: 'Click-through toggle failed',
-        detail: String(error),
-      });
-    }
-  }
-
-  async function toggleOpacityMode() {
-    try {
-      const nextState = await invoke<WindowState>('update_window_mode', {
-        payload: {
-          opacityMode: windowState.opacityMode === 'focus' ? 'peek' : 'focus',
-        },
-      });
-      setWindowState(nextState);
-    } catch (error) {
-      pushNotice({
-        level: 'warning',
-        title: 'Opacity update failed',
-        detail: String(error),
-      });
-    }
-  }
-
-  async function toggleAlwaysOnTop() {
-    try {
-      const nextState = await invoke<WindowState>('update_window_mode', {
-        payload: {
-          alwaysOnTop: !windowState.alwaysOnTop,
-        },
-      });
-      setWindowState(nextState);
-    } catch (error) {
-      pushNotice({
-        level: 'warning',
-        title: 'Pin update failed',
-        detail: String(error),
-      });
-    }
-  }
-
-  async function toggleDockMode() {
-    try {
-      const nextState = await invoke<WindowState>('update_window_mode', {
-        payload: {
-          dockMode: windowState.dockMode === 'top_bar' ? 'right_rail' : 'top_bar',
-        },
-      });
-      setWindowState(nextState);
-    } catch (error) {
-      pushNotice({
-        level: 'warning',
-        title: 'Dock mode update failed',
-        detail: String(error),
-      });
-    }
+  async function handleHide() {
+    await invoke('toggle_visibility');
   }
 
   async function handleCloseSession(sessionId: string) {
     try {
       const updated = await invoke<SessionMetadata>('close_session', {
-        payload: {
-          sessionId,
-          mode: 'terminate',
-        },
+        payload: { sessionId, mode: 'terminate' },
       });
       setSessions((current) =>
         current.map((session) => (session.id === updated.id ? updated : session)),
@@ -276,7 +313,7 @@ export default function App() {
     } catch (error) {
       pushNotice({
         level: 'warning',
-        title: 'Close session failed',
+        title: dict.failedClose,
         detail: String(error),
       });
     }
@@ -292,56 +329,108 @@ export default function App() {
     } catch (error) {
       pushNotice({
         level: 'warning',
-        title: 'Attach failed',
+        title: dict.failedAttach,
         detail: String(error),
       });
     }
   }
 
-  async function handleHide() {
-    await invoke('toggle_visibility');
+  async function handlePinToggle() {
+    try {
+      const nextState = await invoke<WindowState>('pin_window_position', {
+        payload: { pinned: !windowState.positionPinned },
+      });
+      setWindowState(nextState);
+    } catch (error) {
+      pushNotice({
+        level: 'warning',
+        title: dict.failedPin,
+        detail: String(error),
+      });
+    }
+  }
+
+  async function completeOnboarding() {
+    await applyWindowMode({ onboardingCompleted: true });
   }
 
   if (!ready) {
-    return <main className="shell loading-shell">Booting overlay...</main>;
+    return <main className="shell shell-loading">Booting overlay...</main>;
   }
 
   return (
     <main
       className={clsx('shell', {
-        'shell-peek': windowState.opacityMode === 'peek',
-        'shell-click-through': windowState.clickThrough,
         'shell-right-rail': windowState.dockMode === 'right_rail',
+        'shell-click-through': windowState.clickThrough,
       })}
     >
-      <div className="backdrop" />
       <header className="chrome" data-tauri-drag-region>
-        <div className="brand">
-          <div className="brand-mark">CC</div>
-          <div>
-            <p className="eyebrow">Codex overlay manager</p>
-            <h1>ClearCodex</h1>
-          </div>
+        <div className="title-group">
+          <p className="eyebrow">{dict.eyebrow}</p>
+          <h1>ClearCodex</h1>
         </div>
-        <div className="controls">
-          <button onClick={() => void toggleOpacityMode()}>
-            {windowState.opacityMode === 'focus' ? 'Peek opacity' : 'Focus opacity'}
+        <div className="toolbar">
+          <button onClick={() => void handlePinToggle()}>
+            {windowState.positionPinned ? dict.pinnedOn : dict.pinnedOff}
           </button>
-          <button onClick={() => void toggleClickThrough()}>
-            {windowState.clickThrough ? 'Disable pass-through' : 'Enable pass-through'}
+          <button onClick={() => void applyWindowMode({ clickThrough: !windowState.clickThrough })}>
+            {windowState.clickThrough ? dict.clickThroughOn : dict.clickThroughOff}
           </button>
-          <button onClick={() => void toggleAlwaysOnTop()}>
-            {windowState.alwaysOnTop ? 'Pinned' : 'Unpinned'}
+          <button onClick={() => void applyWindowMode({ alwaysOnTop: !windowState.alwaysOnTop })}>
+            {windowState.alwaysOnTop ? 'Top' : 'Free'}
           </button>
-          <button onClick={() => void toggleDockMode()}>
-            {windowState.dockMode === 'top_bar' ? 'Right rail' : 'Top bar'}
+          <button
+            onClick={() =>
+              void applyWindowMode({
+                dockMode: windowState.dockMode === 'top_bar' ? 'right_rail' : 'top_bar',
+              })
+            }
+          >
+            {windowState.dockMode === 'top_bar' ? dict.rightRail : dict.topBar}
           </button>
-          <button className="accent" onClick={() => void handleCreateSession()} disabled={busy}>
-            New tab
+          <button className="primary" onClick={() => void handleCreateSession()} disabled={busy}>
+            {dict.newTab}
           </button>
-          <button onClick={() => void handleHide()}>Hide</button>
+          <button onClick={() => void handleHide()}>{dict.hide}</button>
         </div>
       </header>
+
+      <section className="settings-bar">
+        <label className="setting-chip">
+          <span>{dict.transparency}</span>
+          <input
+            type="range"
+            min="4"
+            max="48"
+            value={Math.round(windowState.overlayAlpha * 100)}
+            onChange={(event) =>
+              void applyWindowMode({
+                overlayAlpha: Number(event.currentTarget.value) / 100,
+              })
+            }
+          />
+          <strong>{Math.round((1 - windowState.overlayAlpha) * 100)}%</strong>
+        </label>
+
+        <div className="setting-chip">
+          <span>{dict.lang}</span>
+          <div className="segmented">
+            <button
+              className={clsx({ active: windowState.language === 'zh_cn' })}
+              onClick={() => void applyWindowMode({ language: 'zh_cn' })}
+            >
+              中文
+            </button>
+            <button
+              className={clsx({ active: windowState.language === 'en' })}
+              onClick={() => void applyWindowMode({ language: 'en' })}
+            >
+              EN
+            </button>
+          </div>
+        </div>
+      </section>
 
       <section className="session-strip">
         {sessions.length ? (
@@ -355,7 +444,7 @@ export default function App() {
             >
               <div className="session-pill-main">
                 <strong>{session.title}</strong>
-                <span>{statusLabel(session.status)}</span>
+                <span>{getStatusLabel(windowState.language, session.status)}</span>
               </div>
               <div className="session-pill-meta">
                 <span>{session.cwd}</span>
@@ -367,7 +456,7 @@ export default function App() {
                       void handleAttachSession(session.id);
                     }}
                   >
-                    Attach
+                    {dict.attach}
                   </button>
                 ) : null}
                 <button
@@ -377,16 +466,16 @@ export default function App() {
                     void handleCloseSession(session.id);
                   }}
                 >
-                  End
+                  {dict.end}
                 </button>
               </div>
             </article>
           ))
         ) : (
           <article className="empty-state">
-            <p>No Codex sessions yet.</p>
-            <button className="accent" onClick={() => void handleCreateSession()}>
-              Start first session
+            <p>{dict.noSessions}</p>
+            <button className="primary" onClick={() => void handleCreateSession()}>
+              {dict.startFirst}
             </button>
           </article>
         )}
@@ -394,22 +483,22 @@ export default function App() {
 
       <section className="workspace">
         <aside className="sidebar">
-          <div>
-            <p className="eyebrow">Workspace</p>
+          <div className="sidebar-card">
+            <p className="eyebrow">{dict.workspace}</p>
             <strong>{defaultCwd}</strong>
           </div>
-          <div>
-            <p className="eyebrow">Hotkeys</p>
+          <div className="sidebar-card">
+            <p className="eyebrow">{dict.mode}</p>
+            <strong>{windowState.dockMode === 'top_bar' ? dict.topBar : dict.rightRail}</strong>
+            <span>{windowState.clickThrough ? dict.passThrough : dict.interactive}</span>
+          </div>
+          <div className="sidebar-card">
+            <p className="eyebrow">{dict.hotkeys}</p>
             <ul>
               {hotkeySummary.map((item) => (
                 <li key={item}>{item}</li>
               ))}
             </ul>
-          </div>
-          <div>
-            <p className="eyebrow">Mode</p>
-            <strong>{windowState.dockMode === 'top_bar' ? 'Top bar' : 'Right rail'}</strong>
-            <span>{windowState.clickThrough ? 'Pointer pass-through on' : 'Interactive'}</span>
           </div>
         </aside>
 
@@ -423,7 +512,7 @@ export default function App() {
                 onError={(detail) =>
                   pushNotice({
                     level: 'warning',
-                    title: `Terminal issue in ${session.title}`,
+                    title: `${dict.sessionIssue}: ${session.title}`,
                     detail,
                   })
                 }
@@ -431,7 +520,7 @@ export default function App() {
             ))
           ) : (
             <div className="terminal-placeholder">
-              <p>The overlay is ready. Launch a Codex tab to begin.</p>
+              <p>{dict.overlayReady}</p>
             </div>
           )}
         </section>
@@ -445,6 +534,23 @@ export default function App() {
           </article>
         ))}
       </aside>
+
+      {!windowState.onboardingCompleted ? (
+        <section className="onboarding">
+          <div className="onboarding-card">
+            <p className="eyebrow">{dict.settings}</p>
+            <h2>{dict.onboardingTitle}</h2>
+            <p>{dict.onboardingBody}</p>
+            <p>{dict.onboardingSecondary}</p>
+            <div className="onboarding-actions">
+              <button className="primary" onClick={() => void completeOnboarding()}>
+                {dict.onboardingAction}
+              </button>
+              <button onClick={() => void completeOnboarding()}>{dict.onboardingDismiss}</button>
+            </div>
+          </div>
+        </section>
+      ) : null}
     </main>
   );
 }

@@ -3,21 +3,16 @@ mod persistence;
 mod session;
 
 use anyhow::Context;
-use models::{
-  AppSnapshot, CloseMode, DockMode, OpacityMode, SessionMetadata, UiNoticeEvent, WindowState,
-};
+use models::{AppLanguage, AppSnapshot, CloseMode, DockMode, SessionMetadata, UiNoticeEvent, WindowState};
 use parking_lot::Mutex;
 use persistence::PersistenceStore;
 use session::SessionManager;
 use tauri::{
-  Emitter,
   tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-  AppHandle, LogicalPosition, LogicalSize, Manager, State, WebviewWindow, WindowEvent,
+  AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, State, WebviewWindow, WindowEvent,
 };
 
 const WINDOW_LABEL: &str = "main";
-const DEFAULT_FOCUS_ALPHA: f64 = 0.88;
-const DEFAULT_PEEK_ALPHA: f64 = 0.68;
 
 pub struct AppState {
   active_session_id: Mutex<Option<String>>,
@@ -100,10 +95,18 @@ struct CloseSessionPayload {
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WindowModePayload {
-  opacity_mode: Option<OpacityMode>,
+  overlay_alpha: Option<f64>,
   click_through: Option<bool>,
   always_on_top: Option<bool>,
   dock_mode: Option<DockMode>,
+  language: Option<AppLanguage>,
+  onboarding_completed: Option<bool>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PinWindowPayload {
+  pinned: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -229,8 +232,8 @@ fn update_window_mode(
 
   {
     let mut current = state.window_state.lock();
-    if let Some(opacity_mode) = payload.opacity_mode {
-      current.opacity_mode = opacity_mode;
+    if let Some(overlay_alpha) = payload.overlay_alpha {
+      current.overlay_alpha = overlay_alpha.clamp(0.04, 0.48);
     }
     if let Some(click_through) = payload.click_through {
       current.click_through = click_through;
@@ -246,6 +249,41 @@ fn update_window_mode(
     }
     if let Some(dock_mode) = payload.dock_mode {
       current.dock_mode = dock_mode;
+      apply_window_layout(&window, &current).map_err(|error| error.to_string())?;
+    }
+    if let Some(language) = payload.language {
+      current.language = language;
+    }
+    if let Some(onboarding_completed) = payload.onboarding_completed {
+      current.onboarding_completed = onboarding_completed;
+    }
+  }
+
+  state.persist().map_err(|error| error.to_string())?;
+  Ok(state.window_state.lock().clone())
+}
+
+#[tauri::command]
+fn pin_window_position(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  payload: PinWindowPayload,
+) -> Result<WindowState, String> {
+  let window = app
+    .get_webview_window(WINDOW_LABEL)
+    .ok_or_else(|| "main window not found".to_string())?;
+
+  {
+    let mut current = state.window_state.lock();
+    current.position_pinned = payload.pinned;
+
+    if payload.pinned {
+      let position = window.outer_position().map_err(|error| error.to_string())?;
+      current.x = Some(position.x as f64);
+      current.y = Some(position.y as f64);
+    } else {
+      current.x = None;
+      current.y = Some(24.0);
       apply_window_layout(&window, &current).map_err(|error| error.to_string())?;
     }
   }
@@ -298,6 +336,7 @@ pub fn run() {
       bootstrap,
       close_session,
       create_session,
+      pin_window_position,
       resize_session,
       send_input,
       set_active_session,
@@ -324,25 +363,14 @@ fn configure_window(window: &WebviewWindow, app: &AppHandle) -> anyhow::Result<(
         let _ = window.hide();
       }
     }
-    WindowEvent::Focused(is_focused) => {
-      let state = app_handle.state::<AppState>();
-      if state.window_state.lock().click_through {
-        return;
-      }
-
-      let level = if *is_focused {
-        OpacityMode::Focus
-      } else {
-        state.window_state.lock().opacity_mode.clone()
-      };
-      let _ = app_handle.emit("window-opacity-sync", serialize_opacity(level));
-    }
     WindowEvent::Moved(position) => {
       let state = app_handle.state::<AppState>();
       let mut window_state = state.window_state.lock();
-      window_state.x = Some(position.x as f64);
-      window_state.y = Some(position.y as f64);
-      let _ = state.persist();
+      if window_state.position_pinned {
+        window_state.x = Some(position.x as f64);
+        window_state.y = Some(position.y as f64);
+        let _ = state.persist();
+      }
     }
     WindowEvent::Resized(size) => {
       let state = app_handle.state::<AppState>();
@@ -354,7 +382,6 @@ fn configure_window(window: &WebviewWindow, app: &AppHandle) -> anyhow::Result<(
     _ => {}
   });
 
-  app.emit("window-opacity-sync", serialize_opacity(snapshot.opacity_mode))?;
   Ok(())
 }
 
@@ -369,24 +396,35 @@ fn apply_window_layout(window: &WebviewWindow, window_state: &WindowState) -> an
     })
     .unwrap_or((1920.0_f64, 1080.0_f64));
 
-  let (width, height, x, y) = match window_state.dock_mode {
+  let (width, height, auto_x, auto_y) = match window_state.dock_mode {
     DockMode::TopBar => {
-      let width = (monitor_width * 0.86).max(1100.0).min(window_state.width.max(1100.0));
+      let width = (monitor_width * 0.84).max(960.0).min(window_state.width.max(960.0));
       let x = ((monitor_width - width) / 2.0).max(24.0);
-      let y = window_state.y.unwrap_or(24.0).max(8.0);
-      (width, window_state.height.max(280.0).min(520.0), x, y)
+      let y = 24.0;
+      (width, window_state.height.max(260.0).min(500.0), x, y)
     }
     DockMode::RightRail => {
-      let width = window_state.width.max(560.0).min(820.0);
-      let height = (monitor_height * 0.86).max(600.0);
+      let width = window_state.width.max(520.0).min(760.0);
+      let height = (monitor_height * 0.82).max(560.0);
       let x = monitor_width - width - 24.0;
       let y = 24.0;
       (width, height, x, y)
     }
   };
 
+  let target_x = if window_state.position_pinned {
+    window_state.x.unwrap_or(auto_x)
+  } else {
+    auto_x
+  };
+  let target_y = if window_state.position_pinned {
+    window_state.y.unwrap_or(auto_y)
+  } else {
+    auto_y
+  };
+
   window.set_size(LogicalSize::new(width, height))?;
-  window.set_position(LogicalPosition::new(window_state.x.unwrap_or(x), window_state.y.unwrap_or(y)))?;
+  window.set_position(LogicalPosition::new(target_x, target_y))?;
   Ok(())
 }
 
@@ -465,16 +503,4 @@ fn register_hotkeys(app: &AppHandle) {
       );
     }
   }
-}
-
-fn serialize_opacity(mode: OpacityMode) -> serde_json::Value {
-  let alpha = match mode {
-    OpacityMode::Focus => DEFAULT_FOCUS_ALPHA,
-    OpacityMode::Peek => DEFAULT_PEEK_ALPHA,
-  };
-
-  serde_json::json!({
-    "mode": mode,
-    "alpha": alpha,
-  })
 }

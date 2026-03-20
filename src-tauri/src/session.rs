@@ -1,7 +1,8 @@
 use std::{
   collections::HashMap,
+  ffi::OsStr,
   io::{Read, Write},
-  path::Path,
+  path::{Path, PathBuf},
   process::Command,
   sync::Arc,
   thread,
@@ -79,7 +80,7 @@ impl SessionManager {
     cwd: String,
     title: Option<String>,
   ) -> anyhow::Result<SessionMetadata> {
-    ensure_codex_exists()?;
+    let codex_command = resolve_codex_launcher()?;
     let cwd_path = Path::new(&cwd);
     if !cwd_path.exists() {
       return Err(anyhow!("working directory does not exist: {cwd}"));
@@ -95,7 +96,10 @@ impl SessionManager {
       })
       .context("failed to create ConPTY session")?;
 
-    let mut command = CommandBuilder::new("codex");
+    let mut command = CommandBuilder::new(&codex_command.program);
+    for arg in &codex_command.args {
+      command.arg(arg);
+    }
     command.cwd(cwd_path);
     command.env("TERM", "xterm-256color");
 
@@ -113,7 +117,7 @@ impl SessionManager {
       title: session_title,
       cwd,
       shell: "ConPTY".into(),
-      codex_command: "codex".into(),
+      codex_command: codex_command.display,
       status: SessionStatus::Running,
       persist_on_close: true,
       pid,
@@ -297,16 +301,51 @@ impl MasterPty for DetachedPty {
   }
 }
 
-fn ensure_codex_exists() -> anyhow::Result<()> {
+struct CodexLaunchSpec {
+  program: String,
+  args: Vec<String>,
+  display: String,
+}
+
+fn resolve_codex_launcher() -> anyhow::Result<CodexLaunchSpec> {
   let output = Command::new("where")
     .arg("codex")
     .output()
     .context("failed to locate codex in PATH")?;
 
-  if output.status.success() {
-    Ok(())
+  if !output.status.success() {
+    return Err(anyhow!("codex CLI is not installed or not available in PATH"));
+  }
+
+  let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+  let launcher = stdout
+    .lines()
+    .map(str::trim)
+    .find(|line| !line.is_empty())
+    .ok_or_else(|| anyhow!("codex CLI path could not be resolved"))?;
+  let launcher_path = PathBuf::from(launcher);
+  let extension = launcher_path
+    .extension()
+    .and_then(OsStr::to_str)
+    .map(str::to_ascii_lowercase)
+    .unwrap_or_default();
+
+  if matches!(extension.as_str(), "cmd" | "bat" | "ps1") {
+    Ok(CodexLaunchSpec {
+      program: "cmd.exe".into(),
+      args: vec![
+        "/D".into(),
+        "/K".into(),
+        format!("\"{}\"", launcher_path.display()),
+      ],
+      display: launcher_path.display().to_string(),
+    })
   } else {
-    Err(anyhow!("codex CLI is not installed or not available in PATH"))
+    Ok(CodexLaunchSpec {
+      program: launcher_path.display().to_string(),
+      args: Vec::new(),
+      display: launcher_path.display().to_string(),
+    })
   }
 }
 

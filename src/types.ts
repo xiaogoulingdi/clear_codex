@@ -1,7 +1,7 @@
 export type SessionStatus = 'starting' | 'running' | 'exited' | 'failed' | 'detached';
 export type CloseMode = 'detach' | 'terminate';
 export type DockMode = 'top_bar' | 'right_rail';
-export type OpacityMode = 'focus' | 'peek';
+export type AppLanguage = 'zh_cn' | 'en';
 
 export interface SessionMetadata {
   id: string;
@@ -19,8 +19,11 @@ export interface SessionMetadata {
 export interface WindowState {
   alwaysOnTop: boolean;
   clickThrough: boolean;
-  opacityMode: OpacityMode;
+  overlayAlpha: number;
   dockMode: DockMode;
+  language: AppLanguage;
+  onboardingCompleted: boolean;
+  positionPinned: boolean;
   width: number;
   height: number;
   x: number | null;
@@ -59,6 +62,5 @@ export interface SessionStatusEvent {
 }
 
 export interface WindowOpacitySyncEvent {
-  mode: OpacityMode;
   alpha: number;
 }

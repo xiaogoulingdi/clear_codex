@@ -26,9 +26,9 @@ pub enum DockMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum OpacityMode {
-  Focus,
-  Peek,
+pub enum AppLanguage {
+  ZhCn,
+  En,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,8 +51,11 @@ pub struct SessionMetadata {
 pub struct WindowState {
   pub always_on_top: bool,
   pub click_through: bool,
-  pub opacity_mode: OpacityMode,
+  pub overlay_alpha: f64,
   pub dock_mode: DockMode,
+  pub language: AppLanguage,
+  pub onboarding_completed: bool,
+  pub position_pinned: bool,
   pub width: f64,
   pub height: f64,
   pub x: Option<f64>,
@@ -64,8 +67,11 @@ impl Default for WindowState {
     Self {
       always_on_top: true,
       click_through: false,
-      opacity_mode: OpacityMode::Focus,
+      overlay_alpha: 0.16,
       dock_mode: DockMode::TopBar,
+      language: AppLanguage::ZhCn,
+      onboarding_completed: false,
+      position_pinned: false,
       width: 1440.0,
       height: 340.0,
       x: None,
