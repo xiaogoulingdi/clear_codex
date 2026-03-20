@@ -8,6 +8,7 @@ using System.Runtime.InteropServices;
 public static class CodexWin32 {
     public const int GWL_EXSTYLE = -20;
     public const int WS_EX_LAYERED = 0x00080000;
+    public const int WS_EX_TRANSPARENT = 0x00000020;
     public const uint LWA_ALPHA = 0x2;
     public static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
     public static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
@@ -47,6 +48,7 @@ function Get-SavedSettings {
       AlwaysOnTop = $true
       AutoWatch = $true
       LiveApply = $true
+      ClickThrough = $false
     }
   }
 
@@ -57,6 +59,7 @@ function Get-SavedSettings {
       AlwaysOnTop = [bool]$raw.AlwaysOnTop
       AutoWatch = [bool]$raw.AutoWatch
       LiveApply = [bool]$raw.LiveApply
+      ClickThrough = [bool]$raw.ClickThrough
     }
   }
   catch {
@@ -65,6 +68,7 @@ function Get-SavedSettings {
       AlwaysOnTop = $true
       AutoWatch = $true
       LiveApply = $true
+      ClickThrough = $false
     }
   }
 }
@@ -74,7 +78,8 @@ function Save-Settings {
     [int]$OpacityPercent,
     [bool]$AlwaysOnTop,
     [bool]$AutoWatch,
-    [bool]$LiveApply
+    [bool]$LiveApply,
+    [bool]$ClickThrough
   )
 
   @{
@@ -82,6 +87,7 @@ function Save-Settings {
     AlwaysOnTop = $AlwaysOnTop
     AutoWatch = $AutoWatch
     LiveApply = $LiveApply
+    ClickThrough = $ClickThrough
   } | ConvertTo-Json | Set-Content $script:SettingsPath -Encoding UTF8
 }
 
@@ -96,7 +102,8 @@ function Set-CodexWindowStyle {
   param(
     [System.Diagnostics.Process]$Process,
     [int]$OpacityPercent,
-    [bool]$AlwaysOnTop
+    [bool]$AlwaysOnTop,
+    [bool]$ClickThrough
   )
 
   $handle = [IntPtr]$Process.MainWindowHandle
@@ -105,13 +112,14 @@ function Set-CodexWindowStyle {
   }
 
   $style = [CodexWin32]::GetWindowLong($handle, [CodexWin32]::GWL_EXSTYLE)
-  if (($style -band [CodexWin32]::WS_EX_LAYERED) -eq 0) {
-    [void][CodexWin32]::SetWindowLong(
-      $handle,
-      [CodexWin32]::GWL_EXSTYLE,
-      ($style -bor [CodexWin32]::WS_EX_LAYERED)
-    )
+  $newStyle = ($style -bor [CodexWin32]::WS_EX_LAYERED)
+  if ($ClickThrough) {
+    $newStyle = ($newStyle -bor [CodexWin32]::WS_EX_TRANSPARENT)
   }
+  else {
+    $newStyle = ($newStyle -band (-bnot [CodexWin32]::WS_EX_TRANSPARENT))
+  }
+  [void][CodexWin32]::SetWindowLong($handle, [CodexWin32]::GWL_EXSTYLE, $newStyle)
 
   $alpha = [byte][Math]::Round(($OpacityPercent / 100.0) * 255)
   $topMode = if ($AlwaysOnTop) { [CodexWin32]::HWND_TOPMOST } else { [CodexWin32]::HWND_NOTOPMOST }
@@ -142,13 +150,8 @@ function Reset-CodexWindowStyle {
   }
 
   $style = [CodexWin32]::GetWindowLong($handle, [CodexWin32]::GWL_EXSTYLE)
-  if (($style -band [CodexWin32]::WS_EX_LAYERED) -eq 0) {
-    [void][CodexWin32]::SetWindowLong(
-      $handle,
-      [CodexWin32]::GWL_EXSTYLE,
-      ($style -bor [CodexWin32]::WS_EX_LAYERED)
-    )
-  }
+  $newStyle = (($style -bor [CodexWin32]::WS_EX_LAYERED) -band (-bnot [CodexWin32]::WS_EX_TRANSPARENT))
+  [void][CodexWin32]::SetWindowLong($handle, [CodexWin32]::GWL_EXSTYLE, $newStyle)
 
   [void][CodexWin32]::SetLayeredWindowAttributes($handle, 0, 255, [CodexWin32]::LWA_ALPHA)
   [void][CodexWin32]::SetWindowPos(
@@ -167,9 +170,9 @@ $settings = Get-SavedSettings
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'Codex Window Controller'
 $form.StartPosition = 'CenterScreen'
-$form.Size = New-Object System.Drawing.Size(380, 295)
-$form.MinimumSize = New-Object System.Drawing.Size(380, 295)
-$form.MaximumSize = New-Object System.Drawing.Size(380, 295)
+$form.Size = New-Object System.Drawing.Size(380, 345)
+$form.MinimumSize = New-Object System.Drawing.Size(380, 345)
+$form.MaximumSize = New-Object System.Drawing.Size(380, 345)
 $form.FormBorderStyle = 'FixedDialog'
 $form.MaximizeBox = $false
 $form.TopMost = $true
@@ -234,27 +237,40 @@ $liveApply.Location = New-Object System.Drawing.Point(20, 190)
 $liveApply.Size = New-Object System.Drawing.Size(240, 24)
 $form.Controls.Add($liveApply)
 
+$clickThrough = New-Object System.Windows.Forms.CheckBox
+$clickThrough.Text = 'Click-through Codex window'
+$clickThrough.Checked = $settings.ClickThrough
+$clickThrough.Location = New-Object System.Drawing.Point(20, 216)
+$clickThrough.Size = New-Object System.Drawing.Size(220, 24)
+$form.Controls.Add($clickThrough)
+
 $applyButton = New-Object System.Windows.Forms.Button
 $applyButton.Text = 'Apply'
-$applyButton.Location = New-Object System.Drawing.Point(16, 226)
+$applyButton.Location = New-Object System.Drawing.Point(16, 266)
 $applyButton.Size = New-Object System.Drawing.Size(78, 30)
 $form.Controls.Add($applyButton)
 
+$restoreInputButton = New-Object System.Windows.Forms.Button
+$restoreInputButton.Text = 'Restore input'
+$restoreInputButton.Location = New-Object System.Drawing.Point(102, 266)
+$restoreInputButton.Size = New-Object System.Drawing.Size(92, 30)
+$form.Controls.Add($restoreInputButton)
+
 $resetButton = New-Object System.Windows.Forms.Button
 $resetButton.Text = 'Reset'
-$resetButton.Location = New-Object System.Drawing.Point(102, 226)
+$resetButton.Location = New-Object System.Drawing.Point(202, 266)
 $resetButton.Size = New-Object System.Drawing.Size(78, 30)
 $form.Controls.Add($resetButton)
 
 $openCodexButton = New-Object System.Windows.Forms.Button
 $openCodexButton.Text = 'Open Codex'
-$openCodexButton.Location = New-Object System.Drawing.Point(188, 226)
+$openCodexButton.Location = New-Object System.Drawing.Point(16, 302)
 $openCodexButton.Size = New-Object System.Drawing.Size(84, 30)
 $form.Controls.Add($openCodexButton)
 
 $closeButton = New-Object System.Windows.Forms.Button
 $closeButton.Text = 'Close'
-$closeButton.Location = New-Object System.Drawing.Point(278, 226)
+$closeButton.Location = New-Object System.Drawing.Point(278, 302)
 $closeButton.Size = New-Object System.Drawing.Size(70, 30)
 $form.Controls.Add($closeButton)
 
@@ -270,10 +286,10 @@ function Invoke-ApplyCurrentSettings {
   }
 
   try {
-    Set-CodexWindowStyle -Process $process -OpacityPercent $slider.Value -AlwaysOnTop $alwaysOnTop.Checked
+    Set-CodexWindowStyle -Process $process -OpacityPercent $slider.Value -AlwaysOnTop $alwaysOnTop.Checked -ClickThrough $clickThrough.Checked
     $status.Text = "Attached to Codex (PID=$($process.Id))"
     $status.ForeColor = [System.Drawing.Color]::FromArgb(60, 120, 70)
-    Save-Settings -OpacityPercent $slider.Value -AlwaysOnTop $alwaysOnTop.Checked -AutoWatch $autoWatch.Checked -LiveApply $liveApply.Checked
+    Save-Settings -OpacityPercent $slider.Value -AlwaysOnTop $alwaysOnTop.Checked -AutoWatch $autoWatch.Checked -LiveApply $liveApply.Checked -ClickThrough $clickThrough.Checked
   }
   catch {
     $status.Text = $_.Exception.Message
@@ -296,14 +312,28 @@ $alwaysOnTop.add_CheckedChanged({
 
 $autoWatch.add_CheckedChanged({
   $timer.Enabled = $autoWatch.Checked
-  Save-Settings -OpacityPercent $slider.Value -AlwaysOnTop $alwaysOnTop.Checked -AutoWatch $autoWatch.Checked -LiveApply $liveApply.Checked
+  Save-Settings -OpacityPercent $slider.Value -AlwaysOnTop $alwaysOnTop.Checked -AutoWatch $autoWatch.Checked -LiveApply $liveApply.Checked -ClickThrough $clickThrough.Checked
 })
 
 $liveApply.add_CheckedChanged({
-  Save-Settings -OpacityPercent $slider.Value -AlwaysOnTop $alwaysOnTop.Checked -AutoWatch $autoWatch.Checked -LiveApply $liveApply.Checked
+  Save-Settings -OpacityPercent $slider.Value -AlwaysOnTop $alwaysOnTop.Checked -AutoWatch $autoWatch.Checked -LiveApply $liveApply.Checked -ClickThrough $clickThrough.Checked
 })
 
 $applyButton.add_Click({
+  Invoke-ApplyCurrentSettings
+})
+
+$clickThrough.add_CheckedChanged({
+  if ($liveApply.Checked) {
+    Invoke-ApplyCurrentSettings
+  }
+  else {
+    Save-Settings -OpacityPercent $slider.Value -AlwaysOnTop $alwaysOnTop.Checked -AutoWatch $autoWatch.Checked -LiveApply $liveApply.Checked -ClickThrough $clickThrough.Checked
+  }
+})
+
+$restoreInputButton.add_Click({
+  $clickThrough.Checked = $false
   Invoke-ApplyCurrentSettings
 })
 
@@ -319,9 +349,10 @@ $resetButton.add_Click({
     Reset-CodexWindowStyle -Process $process
     $slider.Value = 100
     $alwaysOnTop.Checked = $false
+    $clickThrough.Checked = $false
     $status.Text = 'Codex window restored to default.'
     $status.ForeColor = [System.Drawing.Color]::FromArgb(60, 120, 70)
-    Save-Settings -OpacityPercent 100 -AlwaysOnTop $false -AutoWatch $autoWatch.Checked -LiveApply $liveApply.Checked
+    Save-Settings -OpacityPercent 100 -AlwaysOnTop $false -AutoWatch $autoWatch.Checked -LiveApply $liveApply.Checked -ClickThrough $false
   }
   catch {
     $status.Text = $_.Exception.Message
@@ -350,7 +381,7 @@ $timer.add_Tick({
 })
 
 $form.add_FormClosing({
-  Save-Settings -OpacityPercent $slider.Value -AlwaysOnTop $alwaysOnTop.Checked -AutoWatch $autoWatch.Checked -LiveApply $liveApply.Checked
+  Save-Settings -OpacityPercent $slider.Value -AlwaysOnTop $alwaysOnTop.Checked -AutoWatch $autoWatch.Checked -LiveApply $liveApply.Checked -ClickThrough $clickThrough.Checked
 })
 
 $timer.Enabled = $autoWatch.Checked

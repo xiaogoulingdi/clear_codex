@@ -1,0 +1,5 @@
+OpacityPercent=31
+AlwaysOnTop=True
+AutoWatch=False
+LiveApply=True
+ClickThrough=False
