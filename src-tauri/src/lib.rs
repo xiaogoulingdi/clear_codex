@@ -9,13 +9,17 @@ use persistence::PersistenceStore;
 use session::SessionManager;
 use tauri::{
   tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-  AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, State, WebviewWindow, WindowEvent,
+  AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, State, WebviewUrl, WebviewWindow,
+  WebviewWindowBuilder, WindowEvent,
 };
 
+const HANDLE_WINDOW_LABEL: &str = "handle";
 const WINDOW_LABEL: &str = "main";
 
 pub struct AppState {
   active_session_id: Mutex<Option<String>>,
+  handle_move_suppressed: Mutex<bool>,
+  last_handle_position: Mutex<Option<(f64, f64)>>,
   notices: Mutex<Vec<UiNoticeEvent>>,
   persistence: PersistenceStore,
   session_manager: SessionManager,
@@ -26,6 +30,8 @@ impl AppState {
   fn new(snapshot: AppSnapshot, persistence: PersistenceStore) -> Self {
     Self {
       active_session_id: Mutex::new(snapshot.active_session_id),
+      handle_move_suppressed: Mutex::new(false),
+      last_handle_position: Mutex::new(None),
       notices: Mutex::new(Vec::new()),
       session_manager: SessionManager::from_snapshot(&snapshot.sessions),
       persistence,
@@ -246,10 +252,16 @@ fn update_window_mode(
       window
         .set_always_on_top(always_on_top)
         .map_err(|error| error.to_string())?;
+      if let Some(handle) = app.get_webview_window(HANDLE_WINDOW_LABEL) {
+        handle
+          .set_always_on_top(always_on_top)
+          .map_err(|error| error.to_string())?;
+      }
     }
     if let Some(dock_mode) = payload.dock_mode {
       current.dock_mode = dock_mode;
       apply_window_layout(&window, &current).map_err(|error| error.to_string())?;
+      sync_handle_window(&app, true).map_err(|error| error.to_string())?;
     }
     if let Some(language) = payload.language {
       current.language = language;
@@ -285,6 +297,7 @@ fn pin_window_position(
       current.x = None;
       current.y = Some(24.0);
       apply_window_layout(&window, &current).map_err(|error| error.to_string())?;
+      sync_handle_window(&app, true).map_err(|error| error.to_string())?;
     }
   }
 
@@ -299,9 +312,26 @@ fn toggle_visibility(app: AppHandle) -> Result<(), String> {
     .ok_or_else(|| "main window not found".to_string())?;
 
   if window.is_visible().map_err(|error| error.to_string())? {
+    if let Some(handle) = app.get_webview_window(HANDLE_WINDOW_LABEL) {
+      handle.hide().map_err(|error| error.to_string())?;
+    }
     window.hide().map_err(|error| error.to_string())
   } else {
+    if let Some(state) = app.try_state::<AppState>() {
+      {
+        let mut window_state = state.window_state.lock();
+        window_state.click_through = false;
+      }
+      window
+        .set_ignore_cursor_events(false)
+        .map_err(|error| error.to_string())?;
+      state.persist().map_err(|error| error.to_string())?;
+    }
     window.show().map_err(|error| error.to_string())?;
+    sync_handle_window(&app, true).map_err(|error| error.to_string())?;
+    if let Some(handle) = app.get_webview_window(HANDLE_WINDOW_LABEL) {
+      handle.show().map_err(|error| error.to_string())?;
+    }
     window.set_focus().map_err(|error| error.to_string())
   }
 }
@@ -326,6 +356,8 @@ pub fn run() {
       let window = app
         .get_webview_window(WINDOW_LABEL)
         .ok_or_else(|| anyhow::anyhow!("main window not found"))?;
+      let state = app.state::<AppState>();
+      create_handle_window(app.handle(), &state.window_state.lock().clone())?;
 
       configure_window(&window, app.handle())?;
       install_tray(app)?;
@@ -349,11 +381,18 @@ pub fn run() {
 
 fn configure_window(window: &WebviewWindow, app: &AppHandle) -> anyhow::Result<()> {
   let state = app.state::<AppState>();
-  let snapshot = state.window_state.lock().clone();
+  let snapshot = {
+    let mut window_state = state.window_state.lock();
+    // Never restore the window in an unclickable state after restart.
+    window_state.click_through = false;
+    window_state.clone()
+  };
 
   window.set_always_on_top(snapshot.always_on_top)?;
-  window.set_ignore_cursor_events(snapshot.click_through)?;
+  window.set_ignore_cursor_events(false)?;
   apply_window_layout(window, &snapshot)?;
+  sync_handle_window(app, true)?;
+  state.persist()?;
 
   let app_handle = app.clone();
   window.on_window_event(move |event| match event {
@@ -361,6 +400,9 @@ fn configure_window(window: &WebviewWindow, app: &AppHandle) -> anyhow::Result<(
       api.prevent_close();
       if let Some(window) = app_handle.get_webview_window(WINDOW_LABEL) {
         let _ = window.hide();
+      }
+      if let Some(handle) = app_handle.get_webview_window(HANDLE_WINDOW_LABEL) {
+        let _ = handle.hide();
       }
     }
     WindowEvent::Moved(position) => {
@@ -371,6 +413,7 @@ fn configure_window(window: &WebviewWindow, app: &AppHandle) -> anyhow::Result<(
         window_state.y = Some(position.y as f64);
         let _ = state.persist();
       }
+      let _ = sync_handle_window(&app_handle, true);
     }
     WindowEvent::Resized(size) => {
       let state = app_handle.state::<AppState>();
@@ -378,6 +421,7 @@ fn configure_window(window: &WebviewWindow, app: &AppHandle) -> anyhow::Result<(
       window_state.width = size.width as f64;
       window_state.height = size.height as f64;
       let _ = state.persist();
+      let _ = sync_handle_window(&app_handle, true);
     }
     _ => {}
   });
@@ -445,8 +489,15 @@ fn install_tray(app: &mut tauri::App) -> anyhow::Result<()> {
           let visible = window.is_visible().unwrap_or(false);
           if visible {
             let _ = window.hide();
+            if let Some(handle) = tray.app_handle().get_webview_window(HANDLE_WINDOW_LABEL) {
+              let _ = handle.hide();
+            }
           } else {
             let _ = window.show();
+            let _ = sync_handle_window(tray.app_handle(), true);
+            if let Some(handle) = tray.app_handle().get_webview_window(HANDLE_WINDOW_LABEL) {
+              let _ = handle.show();
+            }
             let _ = window.set_focus();
           }
         }
@@ -503,4 +554,90 @@ fn register_hotkeys(app: &AppHandle) {
       );
     }
   }
+}
+
+fn create_handle_window(app: &AppHandle, window_state: &WindowState) -> anyhow::Result<()> {
+  if app.get_webview_window(HANDLE_WINDOW_LABEL).is_some() {
+    return Ok(());
+  }
+
+  let handle = WebviewWindowBuilder::new(
+    app,
+    HANDLE_WINDOW_LABEL,
+    WebviewUrl::App("index.html#handle".into()),
+  )
+  .title("ClearCodex Handle")
+  .transparent(true)
+  .decorations(false)
+  .always_on_top(true)
+  .shadow(false)
+  .skip_taskbar(true)
+  .resizable(false)
+  .inner_size(56.0, 56.0)
+  .visible(true)
+  .build()?;
+
+  handle.set_always_on_top(window_state.always_on_top)?;
+  sync_handle_window(app, true)?;
+
+  let app_handle = app.clone();
+  handle.on_window_event(move |event| match event {
+    WindowEvent::Moved(position) => {
+      let state = app_handle.state::<AppState>();
+      let new_position = (position.x as f64, position.y as f64);
+
+      {
+        let mut suppressed = state.handle_move_suppressed.lock();
+        if *suppressed {
+          *suppressed = false;
+          *state.last_handle_position.lock() = Some(new_position);
+          return;
+        }
+      }
+
+      let previous = *state.last_handle_position.lock();
+      *state.last_handle_position.lock() = Some(new_position);
+
+      if let Some((last_x, last_y)) = previous {
+        if let Some(main) = app_handle.get_webview_window(WINDOW_LABEL) {
+          if let Ok(main_position) = main.outer_position() {
+            let delta_x = new_position.0 - last_x;
+            let delta_y = new_position.1 - last_y;
+            let _ = main.set_position(LogicalPosition::new(
+              main_position.x as f64 + delta_x,
+              main_position.y as f64 + delta_y,
+            ));
+          }
+        }
+      }
+    }
+    _ => {}
+  });
+
+  Ok(())
+}
+
+fn sync_handle_window(app: &AppHandle, show: bool) -> anyhow::Result<()> {
+  let Some(main) = app.get_webview_window(WINDOW_LABEL) else {
+    return Ok(());
+  };
+  let Some(handle) = app.get_webview_window(HANDLE_WINDOW_LABEL) else {
+    return Ok(());
+  };
+
+  let main_position = main.outer_position()?;
+  let main_size = main.outer_size()?;
+  let handle_x = main_position.x as f64 + main_size.width as f64 - 46.0;
+  let handle_y = main_position.y as f64 + 8.0;
+
+  if let Some(state) = app.try_state::<AppState>() {
+    *state.handle_move_suppressed.lock() = true;
+    *state.last_handle_position.lock() = Some((handle_x, handle_y));
+  }
+
+  handle.set_position(LogicalPosition::new(handle_x, handle_y))?;
+  if show {
+    handle.show()?;
+  }
+  Ok(())
 }

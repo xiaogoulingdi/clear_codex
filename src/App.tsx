@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import clsx from 'clsx';
 
+import { ControlHandle } from './ControlHandle';
 import { TerminalSurface } from './components/TerminalSurface';
 import './App.css';
 import type {
@@ -63,6 +64,7 @@ const copy = {
     failedCreate: '启动 Codex 失败',
     failedPin: '位置固定失败',
     failedState: '窗口设置失败',
+    passThroughHint: '已开启穿透，8 秒后会自动恢复。也可以按 Ctrl+Alt+T 立即恢复。',
     failedBootstrap: '初始化失败',
     failedPersist: '保存标签失败',
     failedClose: '关闭会话失败',
@@ -107,6 +109,7 @@ const copy = {
     failedCreate: 'Failed to start Codex',
     failedPin: 'Failed to pin window position',
     failedState: 'Failed to update window settings',
+    passThroughHint: 'Pass-through is active. It will auto-recover in 8 seconds, or press Ctrl+Alt+T now.',
     failedBootstrap: 'Bootstrap failed',
     failedPersist: 'Failed to persist active tab',
     failedClose: 'Failed to close session',
@@ -138,6 +141,14 @@ function getStatusLabel(language: AppLanguage, status: SessionMetadata['status']
 }
 
 export default function App() {
+  if (window.location.hash === '#handle') {
+    return <ControlHandle />;
+  }
+
+  return <MainApp />;
+}
+
+function MainApp() {
   const [ready, setReady] = useState(false);
   const [defaultCwd, setDefaultCwd] = useState('.');
   const [sessions, setSessions] = useState<SessionMetadata[]>([]);
@@ -146,6 +157,7 @@ export default function App() {
   const [hotkeySummary, setHotkeySummary] = useState<string[]>([]);
   const [notices, setNotices] = useState<UiNotice[]>([]);
   const [busy, setBusy] = useState(false);
+  const clickThroughTimerRef = useRef<number | null>(null);
 
   const activeIndex = useMemo(
     () => sessions.findIndex((session) => session.id === activeSessionId),
@@ -158,6 +170,36 @@ export default function App() {
   useEffect(() => {
     document.documentElement.style.setProperty('--overlay-alpha', `${windowState.overlayAlpha}`);
   }, [windowState.overlayAlpha]);
+
+  /* eslint-disable react-hooks/exhaustive-deps */
+  useEffect(() => {
+    if (clickThroughTimerRef.current) {
+      window.clearTimeout(clickThroughTimerRef.current);
+      clickThroughTimerRef.current = null;
+    }
+
+    if (!windowState.clickThrough) {
+      return;
+    }
+
+    pushNotice({
+      level: 'info',
+      title: 'Pass-through',
+      detail: dict.passThroughHint,
+    });
+
+    clickThroughTimerRef.current = window.setTimeout(() => {
+      void applyWindowMode({ clickThrough: false });
+    }, 8000);
+
+    return () => {
+      if (clickThroughTimerRef.current) {
+        window.clearTimeout(clickThroughTimerRef.current);
+        clickThroughTimerRef.current = null;
+      }
+    };
+  }, [dict.passThroughHint, windowState.clickThrough]);
+  /* eslint-enable react-hooks/exhaustive-deps */
 
   useEffect(() => {
     void (async () => {
