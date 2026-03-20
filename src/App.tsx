@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import clsx from 'clsx';
@@ -59,17 +59,17 @@ export default function App() {
   const activeSession =
     sessions[activeIndex] ?? sessions.find((session) => session.status !== 'exited') ?? null;
 
-  const pushNotice = useEffectEvent((notice: UiNotice) => {
+  const pushNotice = (notice: UiNotice) => {
     setNotices((current) => [notice, ...current].slice(0, 6));
-  });
+  };
 
-  const persistActiveSession = useEffectEvent(async (sessionId: string | null) => {
+  const persistActiveSession = async (sessionId: string | null) => {
     await invoke('set_active_session', {
       payload: { sessionId },
     });
-  });
+  };
 
-  const hydrate = useEffectEvent(async () => {
+  const hydrate = async () => {
     const bootstrap = await invoke<BootstrapPayload>('bootstrap');
     setSessions(bootstrap.snapshot.sessions);
     setActiveSessionId(
@@ -82,7 +82,7 @@ export default function App() {
     setHotkeySummary(bootstrap.hotkeySummary);
     setDefaultCwd(bootstrap.defaultCwd);
     setReady(true);
-  });
+  };
 
   useEffect(() => {
     void hydrate().catch((error) => {
@@ -93,8 +93,9 @@ export default function App() {
       });
       setReady(true);
     });
-  }, [hydrate, pushNotice]);
+  }, []);
 
+  /* eslint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     const detachHotkey = listen<string>('hotkey-event', (event) => {
       if (event.payload === 'session.new') {
@@ -146,8 +147,9 @@ export default function App() {
       void detachOpacity.then((unlisten) => unlisten());
     };
   }, [activeIndex, pushNotice, sessions]);
+  /* eslint-enable react-hooks/exhaustive-deps */
 
-  const handleCreateSession = useEffectEvent(async () => {
+  async function handleCreateSession() {
     if (busy) {
       return;
     }
@@ -171,9 +173,9 @@ export default function App() {
     } finally {
       setBusy(false);
     }
-  });
+  }
 
-  const handleSelectSession = useEffectEvent(async (sessionId: string | null) => {
+  async function handleSelectSession(sessionId: string | null) {
     setActiveSessionId(sessionId);
     try {
       await persistActiveSession(sessionId);
@@ -184,9 +186,9 @@ export default function App() {
         detail: String(error),
       });
     }
-  });
+  }
 
-  const toggleClickThrough = useEffectEvent(async () => {
+  async function toggleClickThrough() {
     try {
       const nextState = await invoke<WindowState>('update_window_mode', {
         payload: {
@@ -201,9 +203,9 @@ export default function App() {
         detail: String(error),
       });
     }
-  });
+  }
 
-  const toggleOpacityMode = useEffectEvent(async () => {
+  async function toggleOpacityMode() {
     try {
       const nextState = await invoke<WindowState>('update_window_mode', {
         payload: {
@@ -218,9 +220,9 @@ export default function App() {
         detail: String(error),
       });
     }
-  });
+  }
 
-  const toggleAlwaysOnTop = useEffectEvent(async () => {
+  async function toggleAlwaysOnTop() {
     try {
       const nextState = await invoke<WindowState>('update_window_mode', {
         payload: {
@@ -235,9 +237,9 @@ export default function App() {
         detail: String(error),
       });
     }
-  });
+  }
 
-  const toggleDockMode = useEffectEvent(async () => {
+  async function toggleDockMode() {
     try {
       const nextState = await invoke<WindowState>('update_window_mode', {
         payload: {
@@ -252,9 +254,9 @@ export default function App() {
         detail: String(error),
       });
     }
-  });
+  }
 
-  const handleCloseSession = useEffectEvent(async (sessionId: string) => {
+  async function handleCloseSession(sessionId: string) {
     try {
       const updated = await invoke<SessionMetadata>('close_session', {
         payload: {
@@ -278,9 +280,9 @@ export default function App() {
         detail: String(error),
       });
     }
-  });
+  }
 
-  const handleAttachSession = useEffectEvent(async (sessionId: string) => {
+  async function handleAttachSession(sessionId: string) {
     try {
       const updated = await invoke<SessionMetadata>('attach_session', { sessionId });
       setSessions((current) =>
@@ -294,11 +296,11 @@ export default function App() {
         detail: String(error),
       });
     }
-  });
+  }
 
-  const handleHide = useEffectEvent(async () => {
+  async function handleHide() {
     await invoke('toggle_visibility');
-  });
+  }
 
   if (!ready) {
     return <main className="shell loading-shell">Booting overlay...</main>;

@@ -2,8 +2,6 @@ mod models;
 mod persistence;
 mod session;
 
-use std::sync::Arc;
-
 use anyhow::Context;
 use models::{
   AppSnapshot, CloseMode, DockMode, OpacityMode, SessionMetadata, UiNoticeEvent, WindowState,
@@ -12,7 +10,7 @@ use parking_lot::Mutex;
 use persistence::PersistenceStore;
 use session::SessionManager;
 use tauri::{
-  image::Image,
+  Emitter,
   tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
   AppHandle, LogicalPosition, LogicalSize, Manager, State, WebviewWindow, WindowEvent,
 };
@@ -361,13 +359,15 @@ fn configure_window(window: &WebviewWindow, app: &AppHandle) -> anyhow::Result<(
 }
 
 fn apply_window_layout(window: &WebviewWindow, window_state: &WindowState) -> anyhow::Result<()> {
-  let monitor = window.current_monitor()?.flatten();
+  let monitor = window.current_monitor()?;
   let (monitor_width, monitor_height) = monitor
     .map(|monitor| {
-      let size = monitor.size().to_logical::<f64>(monitor.scale_factor());
-      (size.width, size.height)
+      (
+        monitor.size().width as f64 / monitor.scale_factor(),
+        monitor.size().height as f64 / monitor.scale_factor(),
+      )
     })
-    .unwrap_or((1920.0, 1080.0));
+    .unwrap_or((1920.0_f64, 1080.0_f64));
 
   let (width, height, x, y) = match window_state.dock_mode {
     DockMode::TopBar => {
@@ -391,12 +391,11 @@ fn apply_window_layout(window: &WebviewWindow, window_state: &WindowState) -> an
 }
 
 fn install_tray(app: &mut tauri::App) -> anyhow::Result<()> {
-  let icon = Image::from_path(app.path().resolve("icons/icon.png", tauri::path::BaseDirectory::Resource)?)?;
   let app_handle = app.handle().clone();
 
   TrayIconBuilder::new()
-    .icon(icon)
     .tooltip("ClearCodex")
+    .show_menu_on_left_click(false)
     .on_tray_icon_event(move |tray, event| {
       if let TrayIconEvent::Click {
         button: MouseButton::Left,

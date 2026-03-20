@@ -99,7 +99,7 @@ impl SessionManager {
     command.cwd(cwd_path);
     command.env("TERM", "xterm-256color");
 
-    let child = pair
+    let mut child = pair
       .slave
       .spawn_command(command)
       .context("failed to spawn codex")?;
@@ -165,11 +165,12 @@ impl SessionManager {
     let wait_app = app.clone();
     let wait_session_id = session_id.clone();
     thread::spawn(move || {
-      let exit_code = child.wait().ok();
+      let exit_status = child.wait().ok();
+      let exit_code = exit_status
+        .as_ref()
+        .map(|status| status.exit_code() as i32);
       if let Some(state) = wait_app.try_state::<AppState>() {
-        state
-          .session_manager
-          .mark_exited(&wait_session_id, exit_code.unwrap_or(-1));
+        state.session_manager.mark_exited(&wait_session_id, exit_code.unwrap_or(-1));
         let _ = state.persist();
       }
 
@@ -274,11 +275,11 @@ impl SessionManager {
 struct DetachedPty;
 
 impl MasterPty for DetachedPty {
-  fn resize(&self, _size: PtySize) -> std::io::Result<()> {
+  fn resize(&self, _size: PtySize) -> anyhow::Result<()> {
     Ok(())
   }
 
-  fn get_size(&self) -> std::io::Result<PtySize> {
+  fn get_size(&self) -> anyhow::Result<PtySize> {
     Ok(PtySize {
       rows: DEFAULT_ROWS,
       cols: DEFAULT_COLS,

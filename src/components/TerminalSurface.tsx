@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { FitAddon } from '@xterm/addon-fit';
@@ -22,11 +22,11 @@ export function TerminalSurface({
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
 
-  const reportError = useEffectEvent((message: string) => {
+  const reportError = (message: string) => {
     onError(message);
-  });
+  };
 
-  const fitTerminal = useEffectEvent(async () => {
+  async function fitTerminal() {
     if (!active || !terminalRef.current || !fitAddonRef.current || !hostRef.current) {
       return;
     }
@@ -44,8 +44,9 @@ export function TerminalSurface({
     } catch (error) {
       reportError(String(error));
     }
-  });
+  }
 
+  /* eslint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     if (!hostRef.current || terminalRef.current) {
       return;
@@ -105,7 +106,7 @@ export function TerminalSurface({
       terminalRef.current = null;
       fitAddonRef.current = null;
     };
-  }, [reportError, session.id]);
+  }, [session.id]);
 
   useEffect(() => {
     if (!terminalRef.current) {
@@ -133,6 +134,7 @@ export function TerminalSurface({
     };
   }, [session.id]);
 
+  /* eslint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     if (!active) {
       return;
@@ -152,7 +154,8 @@ export function TerminalSurface({
     return () => {
       observer.disconnect();
     };
-  }, [active, fitTerminal]);
+  }, [active, session.id]);
+  /* eslint-enable react-hooks/exhaustive-deps */
 
   return (
     <section
